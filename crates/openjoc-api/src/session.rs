@@ -29,6 +29,7 @@ struct SessionOptions<'a> {
     binaural_pull_samples: Option<usize>,
     initial_stream_epoch: u64,
     orientation_preparer: Option<ListenerOrientationPreparer>,
+    reconstruction_enabled: bool,
 }
 
 fn validate_binaural_pull_samples(max_pull_samples: usize) -> Result<(), OpenJocError> {
@@ -54,6 +55,19 @@ impl OpenJocSession {
     /// touched; separate sessions can run concurrently on separate threads.
     pub fn new(config: OpenJocConfig) -> Result<Self, OpenJocError> {
         Self::new_with_builtin_hrtf_asset(config, None)
+    }
+
+    /// Creates a session that also returns raw reconstruction from the same decode.
+    /// Use [`Self::receive_frame_with_reconstruction`] to receive both outputs.
+    /// Ordinary sessions retain no reconstruction output buffers or copies.
+    pub fn new_with_reconstruction(config: OpenJocConfig) -> Result<Self, OpenJocError> {
+        Self::new_with_session_options(
+            config,
+            SessionOptions {
+                reconstruction_enabled: true,
+                ..SessionOptions::default()
+            },
+        )
     }
 
     /// Creates an explicitly opted-in binaural session with device-independent
@@ -172,6 +186,7 @@ impl OpenJocSession {
             binaural_pull_samples,
             initial_stream_epoch,
             orientation_preparer,
+            reconstruction_enabled,
         } = options;
         config.validate()?;
         if listener_orientation_enabled && config.render_mode != RenderMode::Binaural {
@@ -185,7 +200,7 @@ impl OpenJocSession {
             ));
         }
         let speaker_layout = config.effective_speaker_layout()?;
-        let speaker = SpeakerRenderer::new_with_linked_gain(
+        let mut speaker = SpeakerRenderer::new_with_linked_gain(
             speaker_layout,
             config.downmix,
             config.render_mode != RenderMode::Binaural,
@@ -208,6 +223,14 @@ impl OpenJocSession {
                 }
             })
             .transpose()?;
+        if reconstruction_enabled {
+            let delay = binaural
+                .as_ref()
+                .map_or(FINAL_LINKED_GAIN_LATENCY_SAMPLES, |state| {
+                    state.lfe_delay.delay_samples()
+                });
+            speaker.reconstruction = Some(super::reconstruction::ReconstructionCapture::new(delay));
+        }
         let mut audio_decoder = JocAccessUnitPcmDecoder::new();
         audio_decoder.set_dialnorm_mode(config.dialnorm);
         Ok(Self {
@@ -216,6 +239,7 @@ impl OpenJocSession {
             speaker,
             binaural,
             output_queue: VecDeque::new(),
+            reconstruction_queue: reconstruction_enabled.then(VecDeque::new),
             pending_binaural_inputs: VecDeque::new(),
             current_binaural_input: None,
             pending_binaural_input_samples: 0,
@@ -277,6 +301,9 @@ impl OpenJocSession {
     #[must_use]
     pub fn effective_config_descriptor(&self) -> String {
         let mut descriptor = self.config.effective_config_descriptor();
+        if self.reconstruction_queue.is_some() {
+            descriptor.push_str("\nreconstruction_output=enabled");
+        }
         if self
             .binaural
             .as_ref()
@@ -691,7 +718,24 @@ impl OpenJocSession {
         if self.binaural_pull_samples.is_some() {
             return None;
         }
-        self.output_queue.pop_front()
+        let pcm = self.output_queue.pop_front()?;
+        if let Some(queue) = self.reconstruction_queue.as_mut() {
+            queue.pop_front();
+        }
+        Some(pcm)
+    }
+
+    /// Receives rendered PCM and raw reconstruction for the same sample range.
+    /// Returns `None` without consuming output if reconstruction was not enabled.
+    /// Mixing this method with [`Self::receive_frame`] is allowed; ordinary
+    /// receives discard the reconstruction paired with that rendered frame.
+    pub fn receive_frame_with_reconstruction(
+        &mut self,
+    ) -> Option<(OpenJocPcmFrame, super::OpenJocReconstructionFrame)> {
+        let queue = self.reconstruction_queue.as_mut()?;
+        let pcm = self.output_queue.pop_front()?;
+        let reconstruction = queue.pop_front()?;
+        Some((pcm, reconstruction))
     }
 
     /// Renders and receives at most the configured pull size from a binaural
@@ -874,7 +918,7 @@ impl OpenJocSession {
                         #[cfg(not(target_arch = "wasm32"))]
                         self.render_timing
                             .record_pcm(&pcm, decode_timing::finish(pcm_start));
-                        self.output_queue.push_back(pcm);
+                        self.queue_pcm(pcm)?;
                     }
                 }
             }
@@ -1108,8 +1152,21 @@ impl OpenJocSession {
             #[cfg(not(target_arch = "wasm32"))]
             self.render_timing
                 .record_pcm(&pcm, decode_timing::finish(pcm_start));
-            self.output_queue.push_back(pcm);
+            self.queue_pcm(pcm)?;
         }
+        Ok(())
+    }
+
+    fn queue_pcm(&mut self, pcm: OpenJocPcmFrame) -> Result<(), OpenJocError> {
+        if let Some(queue) = self.reconstruction_queue.as_mut() {
+            let capture = self
+                .speaker
+                .reconstruction
+                .as_mut()
+                .expect("enabled capture");
+            queue.push_back(capture.receive(&pcm)?);
+        }
+        self.output_queue.push_back(pcm);
         Ok(())
     }
 
@@ -1202,3 +1259,6 @@ mod metadata_tests;
 #[cfg(all(test, feature = "embedded-builtin-hrtf"))]
 #[path = "session_lifecycle_contract.rs"]
 mod lifecycle_contract;
+#[cfg(test)]
+#[path = "reconstruction_tests.rs"]
+mod reconstruction_tests;

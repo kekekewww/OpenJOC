@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in paired raw JOC reconstruction and Base LFE PCM from the headless
+  session, aligned to the rendered sample range without changing render PCM.
+  Labels distinguish admitted decoded objects from unbound reconstruction rows;
+  neither label claims an original authored track identity.
+
 ### Fixed
 
 - Decode sparse JOC side information (`b_joc_sparse`) as a sparse matrix:

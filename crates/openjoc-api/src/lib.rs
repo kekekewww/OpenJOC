@@ -64,6 +64,7 @@ pub use openjoc_eac3::Eac3DecodeStageTiming;
 #[cfg(not(target_arch = "wasm32"))]
 pub use openjoc_joc::ReconstructionStageTiming;
 pub mod listener_orientation;
+mod reconstruction;
 #[cfg(not(target_arch = "wasm32"))]
 mod render_timing;
 mod session;
@@ -700,6 +701,24 @@ pub struct OpenJocPcmFrame {
     pub interleaved_f32: Vec<f32>,
 }
 
+/// Raw reconstruction PCM paired with one rendered PCM frame.
+///
+/// Channels are JOC reconstruction rows followed by the separate Base LFE,
+/// when present. These are decoder outputs, not recovered authored tracks.
+/// Dynamic labels require the admitted carrier-local JOC/OAMD binding; otherwise
+/// rows are numbered. The supported binding does not map bed PCM to JOC rows.
+/// Samples precede dialnorm, spatial gains, and final linked gain.
+/// They include the renderer's common delay; renderer-only FIR tails are zero.
+/// Binaural directional HRIR phase is not a common delay and is not applied.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OpenJocReconstructionFrame {
+    pub sample_rate: u32,
+    pub sample_count: usize,
+    pub pts_samples: Option<i64>,
+    pub channel_labels: Vec<String>,
+    pub interleaved_f32: Vec<f32>,
+}
+
 /// Non-error result of a push/drain operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OpenJocStatus {
@@ -850,6 +869,7 @@ pub struct OpenJocSession {
     speaker: SpeakerRenderer,
     binaural: Option<BinauralState>,
     output_queue: VecDeque<OpenJocPcmFrame>,
+    reconstruction_queue: Option<VecDeque<OpenJocReconstructionFrame>>,
     pending_binaural_inputs: VecDeque<RenderedBlock>,
     current_binaural_input: Option<(RenderedBlock, usize)>,
     pending_binaural_input_samples: usize,
@@ -880,6 +900,9 @@ pub struct OpenJocSession {
 impl OpenJocSession {
     fn clear_pending_output(&mut self) {
         self.output_queue.clear();
+        if let Some(queue) = self.reconstruction_queue.as_mut() {
+            queue.clear();
+        }
         self.pending_binaural_inputs.clear();
         self.current_binaural_input = None;
         self.pending_binaural_input_samples = 0;
@@ -1106,6 +1129,7 @@ struct SpeakerRenderer {
     final_linked_gain: Option<FinalLinkedGain>,
     linked_gain_enabled: bool,
     common_profile_stereo_enabled: bool,
+    reconstruction: Option<reconstruction::ReconstructionCapture>,
     #[cfg(not(target_arch = "wasm32"))]
     render_timing: render_timing::SpeakerTimingState,
 }

@@ -34,6 +34,7 @@ impl SpeakerRenderer {
             final_linked_gain: None,
             linked_gain_enabled,
             common_profile_stereo_enabled,
+            reconstruction: None,
             #[cfg(not(target_arch = "wasm32"))]
             render_timing: super::render_timing::SpeakerTimingState::default(),
         }
@@ -51,6 +52,9 @@ impl SpeakerRenderer {
         let base = &pcm_planes.joc_input_pcm;
         if frame.decoded.state_reset {
             self.timeline.reset();
+            if let Some(capture) = self.reconstruction.as_mut() {
+                capture.reset();
+            }
             self.pending_frames.clear();
             self.assembler.reset();
             self.bridge.reset();
@@ -164,6 +168,9 @@ impl SpeakerRenderer {
         let common_profile_stereo = stereo
             && self.common_profile_stereo_enabled
             && frame.admitted_decoded_joc_binding().is_some();
+        if let Some(capture) = self.reconstruction.as_mut() {
+            capture.push(frame, base)?;
+        }
         let calibrated_base = base.with_dialnorm_applied();
         let calibrated_compatibility = if common_profile_stereo {
             Some(
@@ -445,6 +452,9 @@ impl SpeakerRenderer {
 
     pub(super) fn reset(&mut self) {
         self.bridge.reset();
+        if let Some(capture) = self.reconstruction.as_mut() {
+            capture.reset();
+        }
         self.assembler.reset();
         self.timeline.reset();
         self.pending_frames.clear();
