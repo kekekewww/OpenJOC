@@ -1539,6 +1539,34 @@ indexing is undefined for subbands above the selected band count. OpenJOC uses
 clause 6.5, and the final state assignment. A legal conformance vector remains
 the external confirmation gate for this textual inconsistency.
 
+Clause 6.6.2 pseudocode 2 (sparse side information) is not followed literally in
+three places, because as printed it does not produce a sparse matrix:
+
+- It assigns `offset` (50 or 100) to every channel a band does not select.
+  Pseudocode 5 dequantizes around `nquant / 2` (48 or 96), so those entries
+  become a gain of 0.4 from every unselected input channel into every object.
+  OpenJOC assigns `nquant / 2`, a gain of zero.
+- It forms the channel index of band `pb` from the coded value of band `pb-1`.
+  OpenJOC adds the delta to the decoded index of band `pb-1`, a running sum.
+- It continues the coefficient predictor from
+  `joc_mix_mtx_q[obj][dp][ch][pb-1]` of the newly selected channel, which is
+  the fill value whenever the channel changed. OpenJOC continues from the
+  previous band's coefficient, whichever channel that band selected.
+
+Evidence: one E-AC-3 JOC programme (7029 access units, 15 objects, 5-channel
+core) in which 15 access units carry sparse data points. Decoded literally,
+those access units put front-channel content into every object for one to
+three timeslots, audible as clicks; nine of the eleven places where a stereo
+render had over six times the high-frequency energy of the core decode were
+sparse access units, and none remained there after the change. The mean
+absolute difference between a sparse data point's gains and the non-sparse
+data points of the adjacent access units, over 25200 coefficients, is 0.515
+literal, 0.301 with the zero-gain fill alone, 0.242 with the running channel
+index added and 0.210 with all three. The three readings also match the
+open-source Cavern decoder (`JointObjectCodingDecoder.cs`, `DecodeSparse`),
+which was consulted for this clause after the defect was located. A legal
+conformance vector remains the external confirmation gate.
+
 Clause 6.3.3.4 defines `b_joc_obj_present` as presence of side information, but
 clause 6.6 does not separately state the absent-object interpolation operation.
 OpenJOC retains the previous matrix when side information is absent, consistent

@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Decode sparse JOC side information (`b_joc_sparse`) as a sparse matrix:
+  channels a band does not select get zero gain, the channel index is a
+  running sum over the bands, and the coefficient predictor follows the bands
+  across a channel change. Read literally, clause 6.6.2 pseudocode 2 gives
+  every unselected input channel a gain of 0.4 into every object for the
+  duration of the data point, audible as a click. See `docs/PROVENANCE.md`.
+
 ## [0.20.2] — 2026-11-16
 
 ### Fixed

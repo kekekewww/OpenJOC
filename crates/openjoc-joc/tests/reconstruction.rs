@@ -11,16 +11,18 @@ fn assert_close(actual: f64, expected: f64) {
 
 #[test]
 fn sparse_and_full_differential_paths_follow_distinct_clause_6_6_2_rules() {
+    // Channels are a running sum of the deltas (1, 1 + 1, 2 + 2) and the
+    // coefficient predictor follows the bands (50, 50 + 1, 51 + 95 mod 96).
     let sparse = decode_sparse_coefficients(5, QuantMode::Coarse96, 1, &[1, 2], &[0, 1, 95])
         .expect("valid sparse values");
     assert_eq!(sparse.len(), 5);
     assert_eq!(sparse[1][0], 50);
     assert_eq!(sparse[2][1], 51);
-    assert_eq!(sparse[3][2], 49);
+    assert_eq!(sparse[4][2], 50);
     for (channel, coefficients) in sparse.iter().enumerate() {
         for (band, coefficient) in coefficients.iter().copied().enumerate() {
-            if !matches!((channel, band), (1, 0) | (2, 1) | (3, 2)) {
-                assert_eq!(coefficient, 50);
+            if !matches!((channel, band), (1, 0) | (2, 1) | (4, 2)) {
+                assert_eq!(coefficient, 48);
             }
         }
     }
@@ -28,6 +30,62 @@ fn sparse_and_full_differential_paths_follow_distinct_clause_6_6_2_rules() {
     let full = decode_full_coefficients(QuantMode::Coarse96, &[vec![0, 1, 95], vec![95, 2, 1]])
         .expect("valid full values");
     assert_eq!(full, vec![vec![48, 49, 48], vec![47, 49, 50]]);
+}
+
+#[test]
+fn a_sparse_data_point_takes_each_band_from_exactly_one_channel() {
+    for (mode, channels) in [
+        (QuantMode::Coarse96, 5_u8),
+        (QuantMode::Fine192, 5),
+        (QuantMode::Coarse96, 7),
+        (QuantMode::Fine192, 7),
+    ] {
+        // Twelve bands that stay on one channel, as real streams mostly do,
+        // then wrap past the last channel.
+        let deltas = [0, 0, 0, 0, 0, 0, 0, 0, u16::from(channels) - 1, 0, 2];
+        let symbols = [
+            3,
+            0,
+            mode.steps() - 2,
+            0,
+            1,
+            0,
+            0,
+            5,
+            0,
+            0,
+            0,
+            mode.steps() - 1,
+        ];
+        let quantized = decode_sparse_coefficients(channels, mode, 2, &deltas, &symbols)
+            .expect("valid sparse values");
+        let selected = [2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 3];
+        for band in 0..symbols.len() {
+            for (channel, coefficients) in quantized.iter().enumerate() {
+                let gain = dequantize(coefficients[band], mode).expect("in-range value");
+                if channel == selected[band] {
+                    assert!(gain > 0.0, "band {band} lost its channel");
+                } else {
+                    assert_close(gain, 0.0);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn the_sparse_coefficient_predictor_carries_across_a_channel_change() {
+    // The same symbols give the same coefficients whether or not the bands
+    // change channel; only the row they land in differs.
+    let symbols = [4, 1, 0, 95, 2];
+    let stay = decode_sparse_coefficients(5, QuantMode::Coarse96, 0, &[0, 0, 0, 0], &symbols)
+        .expect("valid sparse values");
+    let hop = decode_sparse_coefficients(5, QuantMode::Coarse96, 0, &[1, 1, 1, 1], &symbols)
+        .expect("valid sparse values");
+    for band in 0..symbols.len() {
+        assert_eq!(hop[band][band], stay[0][band]);
+    }
+    assert_eq!(stay[0], vec![54, 55, 55, 54, 56]);
 }
 
 #[test]

@@ -134,8 +134,21 @@ impl InterpolatedMatrix {
 
 /// Differentially decodes sparse symbols into quantized coefficient matrices.
 ///
-/// Applies clause 6.6.2 pseudocode 2. The output layout is `[channel][band]`;
-/// the coefficients still require dequantization.
+/// Applies clause 6.6.2 pseudocode 2 with three corrections, without which a
+/// sparse data point does not describe a sparse matrix. The output layout is
+/// `[channel][band]`; the coefficients still require dequantization.
+///
+/// - A channel the band does not select gets the zero-gain value of clause
+///   6.6.4 (`nquant / 2`: 48 or 96). The printed pseudocode writes `offset`
+///   (50 or 100) there, which pseudocode 5 turns into a gain of 0.4 from every
+///   unselected input channel into every object.
+/// - The channel index is a running sum over the bands. The printed pseudocode
+///   adds the previous band's coded delta instead of its decoded index.
+/// - The coefficient predictor follows the bands, also where the selected
+///   channel changes. The printed pseudocode restarts from the matrix entry
+///   of the newly selected channel.
+///
+/// `docs/PROVENANCE.md` records the evidence for each of these.
 ///
 /// # Errors
 ///
@@ -175,26 +188,23 @@ pub fn decode_sparse_coefficients(
     }
 
     let bands = vector_symbols.len();
+    let channels = usize::from(channel_count);
+    // Where the coefficient predictor starts, and the value that dequantizes
+    // to a gain of zero.
     let offset = match mode {
         QuantMode::Coarse96 => 50,
         QuantMode::Fine192 => 100,
     };
-    let mut raw_channels = Vec::with_capacity(bands);
-    raw_channels.push(u16::from(initial_channel));
-    raw_channels.extend_from_slice(channel_deltas);
-    let mut matrix = vec![vec![offset; bands]; usize::from(channel_count)];
-    for band in 0..bands {
-        let selected = if band == 0 {
-            raw_channels[0]
-        } else {
-            (raw_channels[band - 1] + raw_channels[band]) % u16::from(channel_count)
-        };
-        let selected = usize::from(selected);
-        matrix[selected][band] = if band == 0 {
-            (offset + vector_symbols[band]) % steps
-        } else {
-            (matrix[selected][band - 1] + vector_symbols[band]) % steps
-        };
+    let zero_gain = steps / 2;
+    let mut matrix = vec![vec![zero_gain; bands]; channels];
+    let mut selected = usize::from(initial_channel);
+    let mut coefficient = offset;
+    for (band, &symbol) in vector_symbols.iter().enumerate() {
+        if band > 0 {
+            selected = (selected + usize::from(channel_deltas[band - 1])) % channels;
+        }
+        coefficient = (coefficient + symbol) % steps;
+        matrix[selected][band] = coefficient;
     }
     Ok(matrix)
 }
