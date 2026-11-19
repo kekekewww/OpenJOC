@@ -122,6 +122,23 @@ fn reconstruction_leaves_render_bit_identical_in_every_render_mode() {
                 assert_eq!(reconstruction.sample_count, render.sample_count);
                 assert_eq!(reconstruction.pts_samples, render.pts_samples);
                 assert_eq!(&reconstruction.channel_labels, labels);
+                assert_eq!(reconstruction.row_keys.len(), labels.len());
+                if fixture_index == 1 {
+                    let lfe = reconstruction.row_keys.last().unwrap();
+                    assert_eq!(lfe[0].sample_offset, 0);
+                    assert!(lfe.iter().all(|key| key.kind
+                        == openjoc_api::ReconstructionRowKind::Lfe
+                        && key.position.is_none()
+                        && key.size.is_none()
+                        && key.ramp_duration.is_none()));
+                    if reconstruction
+                        .interleaved_f32
+                        .chunks_exact(labels.len())
+                        .any(|sample| sample[1] != 0.0)
+                    {
+                        assert!(lfe.iter().any(|key| key.gain == 1.0));
+                    }
+                }
                 assert_eq!(
                     reconstruction.interleaved_f32.len(),
                     render.sample_count * labels.len()

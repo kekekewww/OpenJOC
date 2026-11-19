@@ -2,6 +2,8 @@ use super::{
     DecodedAccessUnitPcm, DecodedPayloadFrame, OpenJocError, OpenJocPcmFrame,
     OpenJocReconstructionFrame, VecDeque,
 };
+use crate::reconstruction_positions::PositionCapture;
+use openjoc_scene::{BaseFullBandCoordinate, BridgeControlFrame};
 
 /// Only constructed for an explicitly requested reconstruction output.
 #[derive(Debug)]
@@ -10,6 +12,7 @@ pub(super) struct ReconstructionCapture {
     labels: Vec<String>,
     pending: VecDeque<f32>,
     ready: VecDeque<OpenJocReconstructionFrame>,
+    positions: PositionCapture,
 }
 
 impl ReconstructionCapture {
@@ -19,6 +22,7 @@ impl ReconstructionCapture {
             labels: Vec::new(),
             pending: VecDeque::new(),
             ready: VecDeque::new(),
+            positions: PositionCapture::default(),
         }
     }
 
@@ -26,12 +30,16 @@ impl ReconstructionCapture {
         self.labels.clear();
         self.pending.clear();
         self.ready.clear();
+        self.positions = PositionCapture::default();
     }
 
     pub(super) fn push(
         &mut self,
         frame: &DecodedPayloadFrame,
         base: &DecodedAccessUnitPcm,
+        base_coordinates: &[BaseFullBandCoordinate],
+        control: &BridgeControlFrame,
+        dimensions: usize,
     ) -> Result<(), OpenJocError> {
         let rows = &frame.decoded.reconstruction_basis.rows;
         let sample_count = rows.first().map_or(0, Vec::len);
@@ -56,6 +64,14 @@ impl ReconstructionCapture {
                 "reconstruction channel identity changed within a stream".to_owned(),
             ));
         }
+        self.positions.capture(
+            frame,
+            base_coordinates,
+            control,
+            dimensions,
+            self.delay_samples,
+            base.lfe.is_some(),
+        )?;
         for sample in 0..sample_count {
             for row in rows {
                 self.pending.push_back(row[sample] as f32);
@@ -73,6 +89,7 @@ impl ReconstructionCapture {
             sample_count,
             pts_samples: None,
             channel_labels: self.labels.clone(),
+            row_keys: self.positions.take(sample_count, sample_count),
             interleaved_f32,
         });
         Ok(())
@@ -86,6 +103,12 @@ impl ReconstructionCapture {
             frame
         } else {
             let count = pcm.sample_count * self.labels.len();
+            let audio_samples = self
+                .pending
+                .len()
+                .checked_div(self.labels.len())
+                .unwrap_or(0)
+                .min(pcm.sample_count);
             let mut interleaved_f32 = Vec::with_capacity(count);
             for _ in 0..count {
                 interleaved_f32.push(self.pending.pop_front().unwrap_or(0.0));
@@ -95,6 +118,7 @@ impl ReconstructionCapture {
                 sample_count: pcm.sample_count,
                 pts_samples: None,
                 channel_labels: self.labels.clone(),
+                row_keys: self.positions.take(pcm.sample_count, audio_samples),
                 interleaved_f32,
             }
         };

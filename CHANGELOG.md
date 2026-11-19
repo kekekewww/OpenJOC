@@ -8,6 +8,8 @@
   session, aligned to the rendered sample range without changing render PCM.
   Labels distinguish admitted decoded objects from unbound reconstruction rows;
   neither label claims an original authored track identity.
+- Reconstruction frames carry sample-aligned room targets, spatial gain and
+  extent per row, including the fixed ISF route label or Base LFE designation.
 
 ### Fixed
 

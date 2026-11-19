@@ -65,6 +65,8 @@ pub use openjoc_eac3::Eac3DecodeStageTiming;
 pub use openjoc_joc::ReconstructionStageTiming;
 pub mod listener_orientation;
 mod reconstruction;
+mod reconstruction_positions;
+pub use reconstruction_positions::{ReconstructionKey, ReconstructionRowKind};
 #[cfg(not(target_arch = "wasm32"))]
 mod render_timing;
 mod session;
@@ -716,6 +718,9 @@ pub struct OpenJocReconstructionFrame {
     pub sample_count: usize,
     pub pts_samples: Option<i64>,
     pub channel_labels: Vec<String>,
+    /// One track per interleaved channel. Each starts at offset zero with the
+    /// effective target, then gives the changes within this PCM frame.
+    pub row_keys: Vec<Vec<ReconstructionKey>>,
     pub interleaved_f32: Vec<f32>,
 }
 
@@ -1129,7 +1134,7 @@ struct SpeakerRenderer {
     final_linked_gain: Option<FinalLinkedGain>,
     linked_gain_enabled: bool,
     common_profile_stereo_enabled: bool,
-    reconstruction: Option<reconstruction::ReconstructionCapture>,
+    reconstruction: Option<Box<reconstruction::ReconstructionCapture>>,
     #[cfg(not(target_arch = "wasm32"))]
     render_timing: render_timing::SpeakerTimingState,
 }

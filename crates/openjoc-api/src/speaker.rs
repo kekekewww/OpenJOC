@@ -168,9 +168,6 @@ impl SpeakerRenderer {
         let common_profile_stereo = stereo
             && self.common_profile_stereo_enabled
             && frame.admitted_decoded_joc_binding().is_some();
-        if let Some(capture) = self.reconstruction.as_mut() {
-            capture.push(frame, base)?;
-        }
         let calibrated_base = base.with_dialnorm_applied();
         let calibrated_compatibility = if common_profile_stereo {
             Some(
@@ -223,6 +220,15 @@ impl SpeakerRenderer {
                 .render_timing
                 .bridge_control_assembly
                 .saturating_add(elapsed);
+        }
+        if let Some(capture) = self.reconstruction.as_mut() {
+            capture.push(
+                frame,
+                base,
+                base_coordinates,
+                &control,
+                self.layout.spatial().coordinate_dimension_count(),
+            )?;
         }
         #[cfg(not(target_arch = "wasm32"))]
         let spatial_start = super::decode_timing::start(self.render_timing.enabled);

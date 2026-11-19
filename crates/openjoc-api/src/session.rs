@@ -229,7 +229,9 @@ impl OpenJocSession {
                 .map_or(FINAL_LINKED_GAIN_LATENCY_SAMPLES, |state| {
                     state.lfe_delay.delay_samples()
                 });
-            speaker.reconstruction = Some(super::reconstruction::ReconstructionCapture::new(delay));
+            speaker.reconstruction = Some(Box::new(
+                super::reconstruction::ReconstructionCapture::new(delay),
+            ));
         }
         let mut audio_decoder = JocAccessUnitPcmDecoder::new();
         audio_decoder.set_dialnorm_mode(config.dialnorm);
